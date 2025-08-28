@@ -33,7 +33,7 @@ function lockBodyScroll(lock: boolean) {
     document.documentElement.style.overflow = "hidden";
   } else {
     const original = document.documentElement.getAttribute("data-overflow") || "";
-    document.documentElement.style.overflow = original as any;
+    (document.documentElement.style.overflow as any) = original;
   }
 }
 
@@ -67,7 +67,7 @@ function saveToClipboard(text: string): Promise<void> {
 
 function normalize(s: string) {
   // ลบเครื่องหมายกำกับเสียง/วรรณยุกต์จากตัวอักษรที่ normalize แล้ว
-  return s.toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "");
+  return s.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
 }
 
 export default function App() {
@@ -150,8 +150,7 @@ export default function App() {
       setRows(prev => [...prev, text]); // ➕ เพิ่มลงตารางผลลัพธ์ทันที
       setTimeout(() => setJustCopied(null), 1200);
     } catch (e) {
-      alert("คัดลอกไม่สำเร็จ
-" + (e as Error).message);
+      alert("คัดลอกไม่สำเร็จ\n" + (e as Error).message);
     }
   }
 
@@ -184,9 +183,7 @@ export default function App() {
   }
 
   function importBulk() {
-    const lines = bulk.split(/
-?
-/).map((s) => s.trim()).filter(Boolean);
+    const lines = bulk.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
     if (!lines.length) return;
     const set = new Set(items);
     lines.forEach((l) => set.add(l));
@@ -203,28 +200,25 @@ export default function App() {
   }
 
   async function copyAllAsColumn() {
-    const payload = rows.join("
-");
+    const payload = rows.join("\n");
     await saveToClipboard(payload);
     alert("คัดลอกทั้งหมดแบบคอลัมน์แล้ว (วางใน Excel จะลงเป็นหลายแถว)");
   }
 
   async function copyAllAsRow() {
-    const payload = rows.join("	"); // คั่นด้วยแท็บ -> 1 แถว หลายคอลัมน์
+    const payload = rows.join("\t"); // คั่นด้วยแท็บ -> 1 แถว หลายคอลัมน์
     await saveToClipboard(payload);
     alert("คัดลอกทั้งหมดแบบแถวเดียวแล้ว (คั่นด้วยแท็บ)");
   }
 
   async function copyCustomAll() {
-    const payload = filteredCustomItems.join("
-");
+    const payload = filteredCustomItems.join("\n");
     await saveToClipboard(payload);
     alert("คัดลอกเฉพาะรายการที่เพิ่มเอง (แบบคอลัมน์) แล้ว");
   }
 
   function exportCustomTxt() {
-    const payload = filteredCustomItems.join("
-");
+    const payload = filteredCustomItems.join("\n");
     const date = new Date().toISOString().slice(0,10);
     downloadFile(`custom-items-${date}.txt`, payload, "text/plain;charset=utf-8");
   }
@@ -232,8 +226,7 @@ export default function App() {
   function exportCustomCsv() {
     // คอลัมน์เดียว รายการละแถว — escape double quotes
     const rowsCsv = filteredCustomItems.map(v => '"' + v.replace(/"/g, '""') + '"');
-    const csv = rowsCsv.join("
-");
+    const csv = rowsCsv.join("\n");
     const date = new Date().toISOString().slice(0,10);
     downloadFile(`custom-items-${date}.csv`, csv, "text/csv;charset=utf-8");
   }
@@ -252,15 +245,9 @@ export default function App() {
   function runSelfTests() {
     try {
       const cases = [
-        { name: "join-\n", pass: ["A","B"].join("
-") === "A
-B" },
-        { name: "join-\t", pass: ["A","B"].join("	") === "A	B" },
-        { name: "split-CRLF", pass: "A
-B
-C".split(/
-?
-/).length === 3 },
+        { name: "join-\\n", pass: ["A","B"].join("\n") === "A\nB" },
+        { name: "join-\\t", pass: ["A","B"].join("\t") === "A\tB" },
+        { name: "split-CRLF", pass: "A\nB\r\nC".split(/\r?\n/).length === 3 },
         { name: "normalize-diacritics", pass: normalize("café") === "cafe" },
       ];
       const failed = cases.filter(c => !c.pass);
@@ -367,11 +354,7 @@ C".split(/
       <textarea
         value={bulk}
         onChange={(e) => setBulk(e.target.value)}
-        placeholder={"วางรายการหลายบรรทัดที่นี่ แล้วกด \"นำเข้า\"
-ตัวอย่าง:
-CARTON BOX NO.30
-CARTON BOX NO.38
-…"}
+        placeholder={"วางรายการหลายบรรทัดที่นี่ แล้วกด \"นำเข้า\"\nตัวอย่าง:\nCARTON BOX NO.30\nCARTON BOX NO.38\n…"}
       />
       <div className="footerBar">
         <div>จำนวนทั้งหมดในระบบ: <b>{items.length}</b> รายการ</div>
@@ -453,7 +436,7 @@ CARTON BOX NO.38
         .searchBox input { width:100%; padding:14px 44px 14px 14px; font-size:16px; border:1px solid #d0d5dd; border-radius:12px; background:#fff; }
         .searchBox .clearBtn { position:absolute; right:8px; top:50%; transform: translateY(-50%); width:28px; height:28px; border:1px solid #d0d5dd; background:#fff; border-radius:8px; cursor:pointer; font-size:18px; line-height:24px; }
         .list { margin-top: 12px; border:1px solid #e5e7eb; border-radius:12px; overflow:hidden; background:#fff; }
-        .empty { padding:12px 14px; color:#6b7280; font-size:14px; }
+        .empty { padding:12px 14px; color: #6b7280; font-size:14px; }
         .row { display:flex; align-items:center; gap:8px; padding:10px 12px; border-top:1px solid #f1f5f9; cursor:pointer; }
         .row:first-child { border-top:0; }
         .row:hover { background:#f9fafb; }
