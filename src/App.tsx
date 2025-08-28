@@ -8,6 +8,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
  * - ปุ่ม "คัดลอกทั้งหมด (แถวเดียว)" -> วางใน Excel จะเป็น 1 แถว หลายคอลัมน์ (คั่นด้วย Tab)
  * - ปุ่มล้างตารางผลลัพธ์
  * - ปุ่มล้างช่องค้นหา (ไอคอน X ในช่อง)
+ * - ✅ ปุ่ม "แสดงคำที่เพิ่มเอง" ในส่วนจัดการคำทั้งหมด (ดู/คัดลอกรวดเดียว/ลบเป็นรายบรรทัดได้)
  */
 
 const DEFAULT_ITEMS = [
@@ -40,6 +41,7 @@ function saveToClipboard(text: string): Promise<void> {
 }
 
 function normalize(s: string) {
+  // ลบเครื่องหมายกำกับเสียง/วรรณยุกต์จากตัวอักษรที่ normalize แล้ว
   return s.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
 }
 
@@ -62,7 +64,11 @@ export default function App() {
   const [justCopied, setJustCopied] = useState<string | null>(null);
   const [newWord, setNewWord] = useState("");
   const [bulk, setBulk] = useState("");
+  const [showCustomPanel, setShowCustomPanel] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
+
+  // คำนวณ "รายการที่เพิ่มเอง" (ทุกอย่างที่ไม่ได้อยู่ใน DEFAULT_ITEMS)
+  const customItems = useMemo(() => items.filter(x => !DEFAULT_ITEMS.includes(x)), [items]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY_ITEMS, JSON.stringify(items));
@@ -164,8 +170,35 @@ export default function App() {
     alert("คัดลอกทั้งหมดแบบแถวเดียวแล้ว (คั่นด้วยแท็บ)");
   }
 
+  async function copyCustomAll() {
+    const payload = customItems.join("\n");
+    await saveToClipboard(payload);
+    alert("คัดลอกเฉพาะรายการที่เพิ่มเอง (แบบคอลัมน์) แล้ว");
+  }
+
   function clearRows() { setRows([]); }
   function clearQuery() { setQuery(""); inputRef.current?.focus(); }
+
+  // ✅ Self-tests (ง่าย ๆ) — เพื่อกัน regression ของอักขระพิเศษ/การแยกบรรทัด/แท็บ
+  function runSelfTests() {
+    try {
+      const cases = [
+        { name: "join-\n", pass: ["A","B"].join("\n") === "A\nB" },
+        { name: "join-\t", pass: ["A","B"].join("\t") === "A\tB" },
+        { name: "split-CRLF", pass: "A\nB\r\nC".split(/\r?\n/).length === 3 },
+        { name: "normalize-diacritics", pass: normalize("café") === "cafe" },
+      ];
+      const failed = cases.filter(c => !c.pass);
+      if (failed.length) {
+        // ไม่รบกวนผู้ใช้ แค่ log เตือนในคอนโซล
+        console.warn("Self-tests failed:", failed.map(f => f.name));
+      }
+    } catch (err) {
+      console.warn("Self-tests error:", err);
+    }
+  }
+
+  useEffect(() => { runSelfTests(); }, []);
 
   return (
     <div className="container">
@@ -267,8 +300,59 @@ export default function App() {
         <div className="actions">
           <button onClick={importBulk}>นำเข้า</button>
           <button onClick={() => { setItems(DEFAULT_ITEMS); setQuery(""); }}>รีเซ็ตเป็นค่าเริ่มต้น</button>
+          {/* ✅ ปุ่มใหม่: แสดงคำที่เพิ่มเอง */}
+          <button onClick={() => setShowCustomPanel(true)}>แสดงคำที่เพิ่มเอง ({customItems.length})</button>
         </div>
       </div>
+
+      {/* ✅ Modal รายการที่เพิ่มเอง */}
+      {showCustomPanel && (
+        <div className="modalOverlay" onClick={() => setShowCustomPanel(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modalHeader">
+              <div className="title">คำที่เพิ่มเอง</div>
+              <button className="closeBtn" onClick={() => setShowCustomPanel(false)}>×</button>
+            </div>
+            <div className="modalBody">
+              <div className="modalActions">
+                <div>จำนวน: <b>{customItems.length}</b> รายการ</div>
+                <div className="actions">
+                  <button onClick={copyCustomAll}>คัดลอกทั้งหมด (คอลัมน์)</button>
+                </div>
+              </div>
+              <div className="tableWrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th style={{width: 64}}>#</th>
+                      <th>รายการ</th>
+                      <th style={{width: 96}}>จัดการ</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {customItems.length === 0 ? (
+                      <tr>
+                        <td colSpan={3} className="emptyCell">ยังไม่มีคำที่เพิ่มเอง</td>
+                      </tr>
+                    ) : customItems.map((t, i) => (
+                      <tr key={t}>
+                        <td className="index">{i + 1}</td>
+                        <td className="value" title={t}>{t}</td>
+                        <td>
+                          <button className="removeBtn small" onClick={() => removeItem(t)}>ลบ</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div className="modalFooter">
+              <button onClick={() => setShowCustomPanel(false)}>ปิด</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* สไตล์พื้นฐาน (inline) — คัดลอกไปไว้ใน src/index.css ก็ได้ */}
       <style>
@@ -290,7 +374,7 @@ export default function App() {
         .row.selected { background:#eef2ff; }
         .text { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .btns { display:flex; gap:6px; }
-        .copyBtn, .removeBtn, .actions button, .addRow button, .tableActions .right button {
+        .copyBtn, .removeBtn, .actions button, .addRow button, .tableActions .right button, .modalFooter button {
           border:1px solid #d0d5dd; background:#fff; padding:8px 10px; border-radius:10px; cursor:pointer; font-size:14px;
         }
         .removeBtn { color:#b42318; border-color:#f2b8b5; }
@@ -299,8 +383,8 @@ export default function App() {
         .addRow { display:flex; gap:8px; margin:8px 0 10px; }
         .addRow input { flex:1; padding:10px 12px; border:1px solid #d0d5dd; border-radius:10px; background:#fff; }
         textarea { width:100%; min-height:140px; padding:10px 12px; border:1px solid #d0d5dd; border-radius:10px; resize:vertical; background:#fff; }
-        .footerBar { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-top:8px; color:#667085; }
-        .actions { display:flex; gap:8px; }
+        .footerBar { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:12px; margin-top:8px; color:#667085; }
+        .actions { display:flex; gap:8px; flex-wrap:wrap; }
         .tableActions { display:flex; justify-content:space-between; align-items:center; }
         .tableWrap { overflow:auto; border:1px solid #e5e7eb; border-radius:12px; background:#fff; }
         table { width:100%; border-collapse:collapse; }
@@ -310,6 +394,15 @@ export default function App() {
         .value { max-width: 1px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .small { padding:6px 8px; font-size:13px; }
         .emptyCell { color:#6b7280; text-align:center; }
+        /* Modal */
+        .modalOverlay { position:fixed; inset:0; background:rgba(2,6,23,.4); display:flex; align-items:center; justify-content:center; padding:16px; z-index:50; }
+        .modal { max-width: 820px; width:100%; background:#fff; border-radius:16px; overflow:hidden; box-shadow:0 10px 30px rgba(0,0,0,.2); }
+        .modalHeader { display:flex; align-items:center; justify-content:space-between; padding:12px 16px; border-bottom:1px solid #e5e7eb; background:#f8fafc; }
+        .modalHeader .title { font-weight:600; }
+        .modalBody { padding:12px 16px; }
+        .modalFooter { display:flex; justify-content:flex-end; gap:8px; padding:12px 16px; border-top:1px solid #e5e7eb; }
+        .modalActions { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
+        .closeBtn { border:1px solid #d0d5dd; background:#fff; width:28px; height:28px; border-radius:8px; font-size:18px; cursor:pointer; }
         `}
       </style>
     </div>
