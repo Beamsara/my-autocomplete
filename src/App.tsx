@@ -8,7 +8,8 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
  * - ปุ่ม "คัดลอกทั้งหมด (แถวเดียว)" -> วางใน Excel จะเป็น 1 แถว หลายคอลัมน์ (คั่นด้วย Tab)
  * - ปุ่มล้างตารางผลลัพธ์
  * - ปุ่มล้างช่องค้นหา (ไอคอน X ในช่อง)
- * - ✅ ปุ่ม "แสดงคำที่เพิ่มเอง" ในส่วนจัดการคำทั้งหมด (ดู/คัดลอกรวดเดียว/ลบเป็นรายบรรทัดได้)
+ * - ปุ่ม "แสดงคำที่เพิ่มเอง" (ดู/ค้นหา/คัดลอกรวดเดียว/บันทึกไฟล์/ลบเป็นรายบรรทัด/ลบทั้งหมด)
+ * - แก้ปัญหาโมดัลเลื่อนยากด้วย: โมดัลสูงสุด 90vh + ส่วนเนื้อหาเลื่อนแยกได้ และล็อคการเลื่อนพื้นหลัง
  */
 
 const DEFAULT_ITEMS = [
@@ -22,6 +23,30 @@ const DEFAULT_ITEMS = [
 
 const STORAGE_KEY_ITEMS = "autocomplete_items_v1";
 const STORAGE_KEY_ROWS = "autocomplete_rows_v1";
+
+// ปิดการเลื่อนพื้นหลังเมื่อเปิดโมดัล (scroll lock)
+function lockBodyScroll(lock: boolean) {
+  if (typeof document === "undefined") return;
+  if (lock) {
+    const original = document.documentElement.style.overflow;
+    document.documentElement.setAttribute("data-overflow", original || "");
+    document.documentElement.style.overflow = "hidden";
+  } else {
+    const original = document.documentElement.getAttribute("data-overflow") || "";
+    document.documentElement.style.overflow = original as any;
+  }
+}
+
+// ดาวน์โหลดไฟล์แบบ client-side
+function downloadFile(filename: string, content: string, mime = "text/plain;charset=utf-8") {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 function saveToClipboard(text: string): Promise<void> {
   if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text);
@@ -42,7 +67,7 @@ function saveToClipboard(text: string): Promise<void> {
 
 function normalize(s: string) {
   // ลบเครื่องหมายกำกับเสียง/วรรณยุกต์จากตัวอักษรที่ normalize แล้ว
-  return s.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+  return s.toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "");
 }
 
 export default function App() {
@@ -65,10 +90,16 @@ export default function App() {
   const [newWord, setNewWord] = useState("");
   const [bulk, setBulk] = useState("");
   const [showCustomPanel, setShowCustomPanel] = useState(false);
+  const [modalQuery, setModalQuery] = useState("");
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   // คำนวณ "รายการที่เพิ่มเอง" (ทุกอย่างที่ไม่ได้อยู่ใน DEFAULT_ITEMS)
   const customItems = useMemo(() => items.filter(x => !DEFAULT_ITEMS.includes(x)), [items]);
+  const filteredCustomItems = useMemo(() => {
+    if (!modalQuery.trim()) return customItems;
+    const q = normalize(modalQuery);
+    return customItems.filter(t => normalize(t).includes(q));
+  }, [customItems, modalQuery]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY_ITEMS, JSON.stringify(items));
@@ -77,6 +108,16 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY_ROWS, JSON.stringify(rows));
   }, [rows]);
+
+  // lock/unlock body scroll เมื่อเปิด/ปิดโมดัล + ปิดด้วย Esc
+  useEffect(() => {
+    lockBodyScroll(showCustomPanel);
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setShowCustomPanel(false);
+    }
+    if (showCustomPanel) window.addEventListener("keydown", onKey);
+    return () => { lockBodyScroll(false); window.removeEventListener("keydown", onKey); };
+  }, [showCustomPanel]);
 
   const suggestions = useMemo(() => {
     if (!query.trim()) return items.slice(0, 25);
@@ -109,7 +150,8 @@ export default function App() {
       setRows(prev => [...prev, text]); // ➕ เพิ่มลงตารางผลลัพธ์ทันที
       setTimeout(() => setJustCopied(null), 1200);
     } catch (e) {
-      alert("คัดลอกไม่สำเร็จ\n" + (e as Error).message);
+      alert("คัดลอกไม่สำเร็จ
+" + (e as Error).message);
     }
   }
 
@@ -142,7 +184,9 @@ export default function App() {
   }
 
   function importBulk() {
-    const lines = bulk.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+    const lines = bulk.split(/
+?
+/).map((s) => s.trim()).filter(Boolean);
     if (!lines.length) return;
     const set = new Set(items);
     lines.forEach((l) => set.add(l));
@@ -159,21 +203,46 @@ export default function App() {
   }
 
   async function copyAllAsColumn() {
-    const payload = rows.join("\n");
+    const payload = rows.join("
+");
     await saveToClipboard(payload);
     alert("คัดลอกทั้งหมดแบบคอลัมน์แล้ว (วางใน Excel จะลงเป็นหลายแถว)");
   }
 
   async function copyAllAsRow() {
-    const payload = rows.join("\t"); // คั่นด้วยแท็บ -> 1 แถว หลายคอลัมน์
+    const payload = rows.join("	"); // คั่นด้วยแท็บ -> 1 แถว หลายคอลัมน์
     await saveToClipboard(payload);
     alert("คัดลอกทั้งหมดแบบแถวเดียวแล้ว (คั่นด้วยแท็บ)");
   }
 
   async function copyCustomAll() {
-    const payload = customItems.join("\n");
+    const payload = filteredCustomItems.join("
+");
     await saveToClipboard(payload);
     alert("คัดลอกเฉพาะรายการที่เพิ่มเอง (แบบคอลัมน์) แล้ว");
+  }
+
+  function exportCustomTxt() {
+    const payload = filteredCustomItems.join("
+");
+    const date = new Date().toISOString().slice(0,10);
+    downloadFile(`custom-items-${date}.txt`, payload, "text/plain;charset=utf-8");
+  }
+
+  function exportCustomCsv() {
+    // คอลัมน์เดียว รายการละแถว — escape double quotes
+    const rowsCsv = filteredCustomItems.map(v => '"' + v.replace(/"/g, '""') + '"');
+    const csv = rowsCsv.join("
+");
+    const date = new Date().toISOString().slice(0,10);
+    downloadFile(`custom-items-${date}.csv`, csv, "text/csv;charset=utf-8");
+  }
+
+  function clearAllCustom() {
+    if (!customItems.length) return;
+    if (confirm(`ต้องการลบคำที่เพิ่มเองทั้งหมด ${customItems.length} รายการหรือไม่?`)) {
+      setItems(prev => prev.filter(x => DEFAULT_ITEMS.includes(x)));
+    }
   }
 
   function clearRows() { setRows([]); }
@@ -183,14 +252,19 @@ export default function App() {
   function runSelfTests() {
     try {
       const cases = [
-        { name: "join-\n", pass: ["A","B"].join("\n") === "A\nB" },
-        { name: "join-\t", pass: ["A","B"].join("\t") === "A\tB" },
-        { name: "split-CRLF", pass: "A\nB\r\nC".split(/\r?\n/).length === 3 },
+        { name: "join-\n", pass: ["A","B"].join("
+") === "A
+B" },
+        { name: "join-\t", pass: ["A","B"].join("	") === "A	B" },
+        { name: "split-CRLF", pass: "A
+B
+C".split(/
+?
+/).length === 3 },
         { name: "normalize-diacritics", pass: normalize("café") === "cafe" },
       ];
       const failed = cases.filter(c => !c.pass);
       if (failed.length) {
-        // ไม่รบกวนผู้ใช้ แค่ log เตือนในคอนโซล
         console.warn("Self-tests failed:", failed.map(f => f.name));
       }
     } catch (err) {
@@ -293,14 +367,17 @@ export default function App() {
       <textarea
         value={bulk}
         onChange={(e) => setBulk(e.target.value)}
-        placeholder={"วางรายการหลายบรรทัดที่นี่ แล้วกด \"นำเข้า\"\nตัวอย่าง:\nCARTON BOX NO.30\nCARTON BOX NO.38\n…"}
+        placeholder={"วางรายการหลายบรรทัดที่นี่ แล้วกด \"นำเข้า\"
+ตัวอย่าง:
+CARTON BOX NO.30
+CARTON BOX NO.38
+…"}
       />
       <div className="footerBar">
         <div>จำนวนทั้งหมดในระบบ: <b>{items.length}</b> รายการ</div>
         <div className="actions">
           <button onClick={importBulk}>นำเข้า</button>
           <button onClick={() => { setItems(DEFAULT_ITEMS); setQuery(""); }}>รีเซ็ตเป็นค่าเริ่มต้น</button>
-          {/* ✅ ปุ่มใหม่: แสดงคำที่เพิ่มเอง */}
           <button onClick={() => setShowCustomPanel(true)}>แสดงคำที่เพิ่มเอง ({customItems.length})</button>
         </div>
       </div>
@@ -311,15 +388,24 @@ export default function App() {
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modalHeader">
               <div className="title">คำที่เพิ่มเอง</div>
-              <button className="closeBtn" onClick={() => setShowCustomPanel(false)}>×</button>
+              <button className="closeBtn" onClick={() => setShowCustomPanel(false)} aria-label="ปิด">×</button>
             </div>
-            <div className="modalBody">
-              <div className="modalActions">
-                <div>จำนวน: <b>{customItems.length}</b> รายการ</div>
-                <div className="actions">
-                  <button onClick={copyCustomAll}>คัดลอกทั้งหมด (คอลัมน์)</button>
-                </div>
+            <div className="modalToolbar">
+              <input
+                className="modalSearch"
+                value={modalQuery}
+                onChange={(e) => setModalQuery(e.target.value)}
+                placeholder="ค้นหาในรายการที่เพิ่มเอง…"
+              />
+              <div className="actions">
+                <button onClick={copyCustomAll}>คัดลอกทั้งหมด (คอลัมน์)</button>
+                <button onClick={exportCustomTxt}>บันทึกเป็น .txt</button>
+                <button onClick={exportCustomCsv}>บันทึกเป็น .csv</button>
+                <button className="danger" onClick={clearAllCustom}>ลบทั้งหมดที่เพิ่มเอง</button>
               </div>
+            </div>
+            <div className="modalBody" role="region" aria-label="รายการที่เพิ่มเอง">
+              <div className="count">จำนวน: <b>{filteredCustomItems.length}</b> รายการ</div>
               <div className="tableWrap">
                 <table>
                   <thead>
@@ -330,11 +416,11 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {customItems.length === 0 ? (
+                    {filteredCustomItems.length === 0 ? (
                       <tr>
-                        <td colSpan={3} className="emptyCell">ยังไม่มีคำที่เพิ่มเอง</td>
+                        <td colSpan={3} className="emptyCell">ไม่พบรายการ</td>
                       </tr>
-                    ) : customItems.map((t, i) => (
+                    ) : filteredCustomItems.map((t, i) => (
                       <tr key={t}>
                         <td className="index">{i + 1}</td>
                         <td className="value" title={t}>{t}</td>
@@ -395,14 +481,17 @@ export default function App() {
         .small { padding:6px 8px; font-size:13px; }
         .emptyCell { color:#6b7280; text-align:center; }
         /* Modal */
-        .modalOverlay { position:fixed; inset:0; background:rgba(2,6,23,.4); display:flex; align-items:center; justify-content:center; padding:16px; z-index:50; }
-        .modal { max-width: 820px; width:100%; background:#fff; border-radius:16px; overflow:hidden; box-shadow:0 10px 30px rgba(0,0,0,.2); }
-        .modalHeader { display:flex; align-items:center; justify-content:space-between; padding:12px 16px; border-bottom:1px solid #e5e7eb; background:#f8fafc; }
+        .modalOverlay { position:fixed; inset:0; background:rgba(2,6,23,.45); display:flex; align-items:center; justify-content:center; padding:16px; z-index:50; }
+        .modal { max-width: 920px; width:100%; max-height: 90vh; background:#fff; border-radius:16px; overflow:hidden; box-shadow:0 10px 30px rgba(0,0,0,.2); display:flex; flex-direction:column; }
+        .modalHeader { display:flex; align-items:center; justify-content:space-between; padding:12px 16px; border-bottom:1px solid #e5e7eb; background:#f8fafc; flex:0 0 auto; }
         .modalHeader .title { font-weight:600; }
-        .modalBody { padding:12px 16px; }
-        .modalFooter { display:flex; justify-content:flex-end; gap:8px; padding:12px 16px; border-top:1px solid #e5e7eb; }
-        .modalActions { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
+        .modalToolbar { display:flex; gap:8px; align-items:center; padding:10px 16px; border-bottom:1px solid #eef2f7; flex:0 0 auto; }
+        .modalToolbar .actions { display:flex; gap:8px; flex-wrap:wrap; }
+        .modalSearch { flex:1; padding:9px 12px; border:1px solid #d0d5dd; border-radius:10px; }
+        .modalBody { padding:12px 16px; overflow:auto; flex:1 1 auto; }
+        .modalFooter { display:flex; justify-content:flex-end; gap:8px; padding:12px 16px; border-top:1px solid #e5e7eb; background:#fff; flex:0 0 auto; }
         .closeBtn { border:1px solid #d0d5dd; background:#fff; width:28px; height:28px; border-radius:8px; font-size:18px; cursor:pointer; }
+        .danger { color:#b42318; border-color:#f2b8b5; }
         `}
       </style>
     </div>
